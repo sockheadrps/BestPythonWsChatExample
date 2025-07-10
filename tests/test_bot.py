@@ -46,8 +46,7 @@ class TestBotUser:
         assert hasattr(bot, 'username')
         assert hasattr(bot, 'websocket')
         assert hasattr(bot, 'active_conversations')
-        assert hasattr(bot, 'responses')
-        assert hasattr(bot, 'greetings')
+        assert hasattr(bot, 'response_system')
         assert bot.username == "ChatBot"
         assert isinstance(bot.active_conversations, dict)
 
@@ -157,7 +156,7 @@ class TestChatBotResponse:
         assert isinstance(response, str)
         assert len(response) > 0
         # Should be one of the predefined responses for general conversation
-        assert response in bot.responses
+        assert response in bot.response_system.general_responses
     
     def test_bot_happy_keyword_response(self):
         """Test bot responds to happy keywords with custom response."""
@@ -439,8 +438,7 @@ class TestBotUtilities:
         
         assert bot.username == "ChatBot"
         assert hasattr(bot, 'websocket')
-        assert hasattr(bot, 'responses')
-        assert hasattr(bot, 'greetings')
+        assert hasattr(bot, 'response_system')
 
 
 class TestBotErrorHandling:
