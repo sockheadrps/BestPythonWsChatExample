@@ -1,31 +1,37 @@
-# Python
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 
 # Virtual environments
 .env
-.venv
+.venv/
 env/
 venv/
 ENV/
 
-# Distribution / packaging
+# Packaging
 *.egg-info/
 dist/
 build/
 
-# Database
+# Databases
 chat.db
+test*.db
 *.db
+*.sqlite
+*.sqlite3
 
-# IDE
+# IDE configs
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# OS files
 .DS_Store
-Thumbs.db 
+Thumbs.db
+
+# Pytest / app caches
+.pytest_cache/
+.portfolio_cache/
