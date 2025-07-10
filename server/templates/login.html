@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login</title>
+    <link rel="stylesheet" href="/static/login.css" />
+  </head>
+  <body>
+    <div class="chat-bubbles">
+      <div class="chat-bubble">
+        <div class="bubble-content">
+          📢 General Chat: Messages exchanged in the general chat are not logged or saved by the
+          server but are unencrypted and visible to all users.
+        </div>
+        <div class="system-label">System</div>
+      </div>
+      <div class="chat-bubble">
+        <div class="bubble-content">
+          🔒 Private Messages: Messages exchanged in PMs are end-to-end encrypted with AES-256
+          encryption. The server cannot decrypt them and only you and the recipient can read these
+          messages.
+        </div>
+        <div class="system-label">System</div>
+      </div>
+      <div class="chat-bubble">
+        <div class="bubble-content">
+          💡 Tip: Click the PM button next to any user in the Online Users panel by hovering over
+          their name to start a private conversation!
+        </div>
+        <div class="system-label">System</div>
+      </div>
+    </div>
+
+    <div class="login-container">
+      <h2>Login</h2>
+      <form id="login-form">
+        <input type="text" id="username" placeholder="Username" required />
+        <input type="password" id="password" placeholder="Password" required />
+        <button type="submit">Login</button>
+        <div class="error-message" id="error-msg"></div>
+      </form>
+
+      <div class="register-section">
+        <button class="register-button" onclick="window.location.href='/register'">
+          Don't have an account? Register
+        </button>
+      </div>
+    </div>
+    <script src="/static/login.js"></script>
+  </body>
+</html>
