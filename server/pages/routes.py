@@ -1,8 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from jose import jwt, JWTError
-from pathlib import Path
 from server.utils.template_engine import templates
 
 from server.auth.auth import SECRET_KEY, ALGORITHM

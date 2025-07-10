@@ -8,6 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from server.chat.manager import ConnectionManager
 from server.chat.private_manager import PrivateConnectionManager
+from server.chat.bot_responses import BotResponses
 from server.utils.models import (
     PmAcceptMessage, PmTextMessage, PubkeyRequestMessage, PubkeyResponseMessage
 )
@@ -48,35 +49,11 @@ class ChatBot:
         self.public_key_pem = None
         self.user_public_keys: Dict[str, bytes] = {}  # Store other users' public keys
         
+        # Response system
+        self.response_system = BotResponses()
+        
         # Generate RSA key pair for the bot
         self._generate_key_pair()
-        
-        # Predefined responses - you can customize these
-        self.responses = [
-            "Hello! I'm a friendly chat bot. How can I help you today?",
-            "That's interesting! Tell me more about that.",
-            "I understand. Is there anything else you'd like to discuss?",
-            "Thanks for chatting with me! I'm always here if you need someone to talk to.",
-            "That sounds great! I hope everything works out well for you.",
-            "I see what you mean. Have you considered trying a different approach?",
-            "That's a good question! What do you think would be the best solution?",
-            "I appreciate you sharing that with me. How are you feeling about it?",
-            "Interesting perspective! I hadn't thought about it that way.",
-            "That reminds me of something similar I've heard before. What happened next?",
-            "I'm here to listen if you want to talk more about anything.",
-            "That's wonderful! Congratulations on that achievement!",
-            "I hope you have a great day! Feel free to message me anytime.",
-            "Thanks for the conversation! I enjoyed chatting with you.",
-            "That's quite an experience! How did that make you feel?"
-        ]
-        
-        # Greeting messages for new conversations
-        self.greetings = [
-            "Hi there! I'm ChatBot, your friendly AI companion. What's on your mind today?",
-            "Hello! Nice to meet you! I'm always here for a chat. How are you doing?",
-            "Hey! Thanks for starting a conversation with me. What would you like to talk about?",
-            "Hi! I'm ChatBot, and I'm here to chat whenever you need. What's up?",
-        ]
     
     def _generate_key_pair(self):
         """Generate RSA key pair for the bot"""
@@ -156,40 +133,18 @@ class ChatBot:
         
     def get_response(self, user: str, message: str) -> str:
         """Generate a response based on the user and their message"""
-        # If this is the first message from this user, use a greeting
-        if user not in self.active_conversations:
-            self.active_conversations[user] = []
-            return random.choice(self.greetings)
-        
-        # Add the user's message to conversation history
-        self.active_conversations[user].append(f"{user}: {message}")
-        
-        # Simple keyword-based responses for more engaging conversation
-        message_lower = message.lower()
-        
-        if any(word in message_lower for word in ['hello', 'hi', 'hey', 'greetings']):
-            return "Hello! It's great to hear from you again! How are you doing?"
-        elif any(word in message_lower for word in ['bye', 'goodbye', 'see you', 'farewell']):
-            return "Goodbye! It was lovely chatting with you. Take care and feel free to message me anytime!"
-        elif any(word in message_lower for word in ['thank', 'thanks', 'thx']):
-            return "You're very welcome! I'm happy I could help. Is there anything else you'd like to talk about?"
-        elif any(word in message_lower for word in ['help', 'assistance', 'support']):
-            return "I'd be happy to help! While I'm just a chat bot, I'm here to listen and chat with you. What's on your mind?"
-        elif any(word in message_lower for word in ['how are you', 'how do you feel', 'what\'s up']):
-            return "I'm doing great, thank you for asking! I'm always excited to have new conversations. How about you?"
-        elif any(word in message_lower for word in ['sad', 'upset', 'frustrated', 'angry', 'depressed']):
-            return "I'm sorry to hear you're feeling that way. Sometimes it helps to talk about what's bothering you. I'm here to listen."
-        elif any(word in message_lower for word in ['happy', 'excited', 'great', 'awesome', 'wonderful']):
-            return "That's wonderful to hear! I love when people share positive news. What's making you so happy?"
-        elif '?' in message:
-            return "That's a great question! I wish I had all the answers, but I'd love to hear your thoughts on it."
-        else:
-            # Return a random response for general conversation
-            return random.choice(self.responses)
+        return self.response_system.get_response(user, message, self.active_conversations)
+    
+    def customize_responses(self, **kwargs):
+        """Allow customization of bot responses"""
+        self.response_system.customize_responses(**kwargs)
     
     async def handle_pm_invite(self, from_user: str):
         """Automatically accept all PM invites"""
         print(f"🤖 {self.username} received PM invite from {from_user} - auto-accepting")
+        
+        # Track the PM session when bot accepts
+        self.private_manager.add_pm_session(self.username, from_user)
         
         # Send acceptance back through the private manager
         accept_msg = PmAcceptMessage(sender=self.username)
@@ -250,6 +205,9 @@ class ChatBot:
     async def handle_pm_disconnect(self, from_user: str):
         """Handle when a user disconnects from PM"""
         print(f"🤖 {self.username} - {from_user} disconnected from PM")
+        
+        # Remove the PM session
+        self.private_manager.remove_pm_session(self.username, from_user)
         
         # Clean up conversation history and keys for this user
         if from_user in self.active_conversations:

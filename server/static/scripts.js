@@ -4,8 +4,15 @@ let currentUsername = '';
 let token = null;
 let keyPair = null;
 let userPublicKeys = new Map();
+let isPanelHidden = true;
 
-// DOM elements
+// PM Session Management
+const pmSessions = new Map(); // key: username, value: array of messages
+const unreadCounts = new Map(); // key: username, value: number of unread messages
+let currentPmUser = null;
+let latestUserList = [];
+
+// DOM elements - cached for performance
 const elements = {
   messages: document.getElementById('messages'),
   form: document.getElementById('chat-form'),
@@ -15,7 +22,7 @@ const elements = {
   logoutBtn: document.getElementById('logout-btn'),
   privateChatContainer: document.getElementById('private-chat-container'),
   privateChatBox: document.getElementById('private-chat-box'),
-  privateChatClose: document.getElementById('close-private-chat'),
+  privateChatMaximize: document.getElementById('maximize-private-chat'),
   privateChatMinimize: document.getElementById('minimize-private-chat'),
   privateChatDisconnect: document.getElementById('disconnect-private-chat'),
   privateInput: document.getElementById('private-input'),
@@ -24,6 +31,9 @@ const elements = {
   usersToggle: document.getElementById('users-toggle'),
   usersPanel: document.getElementById('users-panel'),
   mainContainer: document.querySelector('.main-container'),
+  aboutBtn: document.getElementById('about-btn'),
+  aboutModal: document.getElementById('about-modal'),
+  closeAboutModal: document.getElementById('close-about-modal'),
 };
 
 // Utility functions
@@ -50,6 +60,35 @@ const utils = {
 
   scrollToBottom: (element) => {
     element.scrollTop = element.scrollHeight;
+  },
+
+  // Simplified DOM helper
+  getElement: (id) => document.getElementById(id),
+
+  // Create PM button with consistent logic
+  createPmButton: (user, hasActiveSession) => {
+    return hasActiveSession
+      ? `<button class="pm-button" disabled title="Already have a PM session with this user">PM</button>`
+      : `<button class="pm-button" onclick="sendPmInvite('${user}')">PM</button>`;
+  },
+
+  // Create notification toast (consolidated pattern)
+  createToast: (type, content, actions = '') => {
+    const toastContainer = utils.getElement('invite-toast-container');
+    if (!toastContainer) {
+      console.error('Toast container not found!');
+      return null;
+    }
+
+    const toast = utils.createElement('div', `invite-toast ${type}`);
+    toast.innerHTML = content + actions;
+    toastContainer.appendChild(toast);
+
+    // Auto-remove after delay
+    const timeout =
+      type === 'decline-notification' || type === 'disconnect-notification' ? 4000 : 15000;
+    setTimeout(() => toast.remove(), timeout);
+    return toast;
   },
 
   // Check if Web Crypto API is available
@@ -187,7 +226,19 @@ const utils = {
 // Message handling
 const messageHandler = {
   addMessage: (container, user, message, className = '') => {
-    const msgDiv = utils.createElement('div', `message ${className}`);
+    // Automatically determine if message is from current user
+    let messageClass = className;
+    if (!className) {
+      if (user === currentUsername) {
+        messageClass = 'user';
+      } else if (user === 'System') {
+        messageClass = 'system';
+      } else {
+        messageClass = 'other';
+      }
+    }
+
+    const msgDiv = utils.createElement('div', `message ${messageClass}`);
     msgDiv.innerHTML = `
       <span class="user-name">${user}</span>
       <span class="message-text">${message}</span>
@@ -204,6 +255,252 @@ const messageHandler = {
   },
 };
 
+// Simplified PM management
+const pmManager = {
+  // Create or update PM tab with simplified logic
+  ensureTab: (user, status) => {
+    const footer = utils.getElement('pm-footer');
+    if (!footer) return;
+
+    const tabId = `pm-tab-${user}`;
+    let tab = utils.getElement(tabId);
+
+    // Remove tab for declined invites
+    if (status === 'declined' && tab) {
+      tab.remove();
+      return;
+    }
+
+    // Create new tab if needed
+    if (!tab && status !== 'declined') {
+      tab = utils.createElement('div', 'pm-tab');
+      tab.id = tabId;
+
+      // Add status dot
+      const statusDot = utils.createElement('div', 'status-dot');
+      tab.appendChild(statusDot);
+
+      // Add click handler
+      tab.addEventListener('click', () => pmManager.toggleChat(user));
+      footer.appendChild(tab);
+    }
+
+    // Update tab appearance
+    if (tab) {
+      pmManager.updateTabStatus(tab, user, status);
+    }
+  },
+
+  // Simplified tab status update
+  updateTabStatus: (tab, user, status) => {
+    // Remove old status classes
+    tab.classList.remove('pending', 'accepted', 'disconnected');
+
+    // Add new status
+    tab.classList.add(status);
+
+    // Update text content
+    const statusText = {
+      pending: `${user} (pending)`,
+      accepted: user,
+      disconnected: user,
+    };
+    tab.textContent = statusText[status] || user;
+
+    // Re-add status dot after text update
+    if (!tab.querySelector('.status-dot')) {
+      const statusDot = utils.createElement('div', 'status-dot');
+      tab.appendChild(statusDot);
+    }
+  },
+
+  // Toggle chat visibility
+  toggleChat: (user) => {
+    const isHidden = elements.privateChatContainer.classList.contains('hidden');
+
+    if (isHidden) {
+      pmManager.openChat(user);
+    } else {
+      pmManager.closeChat();
+    }
+
+    // Update active tab state
+    document.querySelectorAll('.pm-tab').forEach((t) => t.classList.remove('active'));
+    if (!isHidden) {
+      utils.getElement(`pm-tab-${user}`)?.classList.add('active');
+    }
+  },
+
+  // Open chat for specific user
+  openChat: (user) => {
+    currentPmUser = user;
+    elements.privateChatContainer.dataset.user = user;
+    elements.privateChatContainer.classList.remove('hidden');
+    elements.privateChatContainer.style.display = 'flex';
+
+    // Clear unread count
+    unreadCounts.set(user, 0);
+    pmManager.updateUnreadIndicator(user);
+
+    // Update header
+    const chatUserName = utils.getElement('chat-user-name');
+    if (chatUserName) {
+      chatUserName.textContent = `with ${user}`;
+    }
+
+    // Load messages
+    pmManager.loadMessages(user);
+
+    // Set enabled state based on connection status
+    const tab = utils.getElement(`pm-tab-${user}`);
+    const isDisconnected = tab?.classList.contains('disconnected');
+    pmManager.setChatEnabled(!isDisconnected);
+
+    if (isDisconnected) {
+      elements.privateChatMinimize.style.display = 'none';
+      elements.privateChatDisconnect.title = 'Close';
+      elements.privateChatDisconnect.onclick = pmManager.closeChat;
+    } else {
+      elements.privateChatMinimize.style.display = 'inline-block';
+      elements.privateChatDisconnect.title = 'Disconnect';
+      elements.privateChatDisconnect.onclick = pmManager.disconnect;
+    }
+  },
+
+  // Close chat
+  closeChat: () => {
+    elements.privateChatContainer.classList.add('hidden');
+    const chatUserName = utils.getElement('chat-user-name');
+    if (chatUserName) {
+      chatUserName.textContent = 'with Username';
+    }
+    currentPmUser = null;
+    document.querySelectorAll('.pm-tab').forEach((t) => t.classList.remove('active'));
+  },
+
+  // Load messages for user
+  loadMessages: (user) => {
+    elements.privateChatBox.innerHTML = '';
+    const messages = pmSessions.get(user) || [];
+
+    if (messages.length === 0) {
+      messageHandler.addSystemMessage(
+        elements.privateChatBox,
+        `Private chat with <b>${user}</b> started.`
+      );
+    } else {
+      messages.forEach(({ from, text }) => {
+        messageHandler.addMessage(elements.privateChatBox, from, text);
+      });
+    }
+  },
+
+  // Set chat enabled/disabled state
+  setChatEnabled: (enabled) => {
+    elements.privateInput.disabled = !enabled;
+    elements.privateSendBtn.disabled = !enabled;
+    elements.privateInput.placeholder = enabled
+      ? 'Type a private message...'
+      : 'Private chat disconnected';
+  },
+
+  // Update unread message indicator
+  updateUnreadIndicator: (username) => {
+    const tab = utils.getElement(`pm-tab-${username}`);
+    if (!tab) return;
+
+    const unreadCount = unreadCounts.get(username) || 0;
+
+    // Remove existing badge
+    const existingBadge = tab.querySelector('.unread-badge');
+    if (existingBadge) {
+      existingBadge.remove();
+    }
+
+    if (unreadCount > 0) {
+      tab.classList.add('has-unread');
+      const badge = utils.createElement('span', 'unread-badge');
+      badge.textContent = unreadCount > 99 ? '99+' : unreadCount.toString();
+      tab.appendChild(badge);
+    } else {
+      tab.classList.remove('has-unread');
+    }
+  },
+
+  // Disconnect from current PM
+  disconnect: () => {
+    const user = elements.privateChatContainer.dataset.user;
+    if (!user) return;
+
+    // Send disconnect notification
+    socket.send(
+      JSON.stringify({
+        type: 'pm_disconnect',
+        to: user,
+      })
+    );
+
+    // Clean up local state
+    const tab = utils.getElement(`pm-tab-${user}`);
+    if (tab) tab.remove();
+
+    pmSessions.delete(user);
+    if (currentPmUser === user) currentPmUser = null;
+
+    messageHandler.addSystemMessage(
+      elements.privateChatBox,
+      'You have disconnected the private chat.'
+    );
+
+    pmManager.closeChat();
+    pmManager.setChatEnabled(false);
+    refreshPmButtonStates();
+  },
+
+  // Handle incoming PM message
+  handleMessage: async (data) => {
+    const { from, ciphertext } = data;
+
+    try {
+      const msg = await utils.decrypt(ciphertext);
+
+      if (!pmSessions.has(from)) {
+        pmSessions.set(from, []);
+        pmManager.ensureTab(from, 'accepted');
+      }
+
+      pmSessions.get(from).push({ from, text: msg });
+
+      if (currentPmUser === from && !elements.privateChatContainer.classList.contains('hidden')) {
+        // Message is for the current active PM user and chat is visible
+        messageHandler.addMessage(elements.privateChatBox, from, msg);
+      } else {
+        // Increment unread count and update indicator
+        const currentUnread = unreadCounts.get(from) || 0;
+        unreadCounts.set(from, currentUnread + 1);
+        pmManager.updateUnreadIndicator(from);
+
+        // Play notification sound
+        playMessageAlert();
+
+        // If this is the current PM user but chat is minimized, still add the message
+        if (currentPmUser === from) {
+          messageHandler.addMessage(elements.privateChatBox, from, msg);
+        }
+      }
+    } catch (error) {
+      console.error('Error handling PM message:', error);
+      if (currentPmUser === from) {
+        messageHandler.addMessage(
+          elements.privateChatBox,
+          from,
+          '[Encrypted message - decryption failed]'
+        );
+      }
+    }
+  },
+};
+
 // WebSocket message handlers
 const socketHandlers = {
   chat_message: (data) => {
@@ -216,48 +513,27 @@ const socketHandlers = {
 
   user_list: (data) => {
     if (!elements.onlineUsers) return;
-    elements.onlineUsers.innerHTML = '';
 
-    data.users
-      .filter((user) => user !== currentUsername)
-      .forEach((user, index) => {
-        const li = utils.createElement('li', 'online-user');
-        li.innerHTML = `
-          <span class="user-name">${user}</span>
-          <button class="pm-button" onclick="sendPmInvite('${user}')">PM</button>
-        `;
+    // Filter out current user and use the proper updateOnlineUsers function
+    const filteredUsers = data.users.filter((user) => user !== currentUsername);
+    updateOnlineUsers(filteredUsers);
 
-        // If panel is visible, add staggered animation
-        if (!isPanelHidden) {
-          li.style.animationDelay = `${0.4 + index * 0.1}s`;
-        }
-
-        elements.onlineUsers.appendChild(li);
+    // Add staggered animation if panel is visible
+    if (!isPanelHidden) {
+      const userItems = elements.onlineUsers.querySelectorAll('.online-user');
+      userItems.forEach((li, index) => {
+        li.style.animationDelay = `${0.4 + index * 0.1}s`;
       });
-  },
-
-  pm_message: async (data) => {
-    try {
-      const decryptedMessage = await utils.decrypt(data.ciphertext);
-      messageHandler.addMessage(elements.privateChatBox, data.from, decryptedMessage);
-      openPrivateChat(data.from);
-    } catch (error) {
-      console.error('Error handling PM message:', error);
-      messageHandler.addMessage(
-        elements.privateChatBox,
-        data.from,
-        '[Encrypted message - decryption failed]'
-      );
     }
   },
 
+  pm_message: pmManager.handleMessage,
+
   pubkey_request: (data) => {
-    // Someone is requesting our public key
     sendPublicKey(data.from);
   },
 
   pubkey_response: async (data) => {
-    // Received someone's public key
     try {
       const publicKey = await utils.importPublicKey(data.public_key);
       userPublicKeys.set(data.from, publicKey);
@@ -273,46 +549,60 @@ const socketHandlers = {
 
   pm_accept: (data) => {
     const fromUser = data.from;
-    ensurePmFooterTab(fromUser, fromUser, 'accepted');
+    pmManager.ensureTab(fromUser, 'accepted');
     messageHandler.addSystemMessage(
       elements.privateChatBox,
       `${fromUser} accepted the private chat.`
     );
-    openPrivateChat(fromUser);
+    pmManager.openChat(fromUser);
+    refreshPmButtonStates();
   },
 
   pm_decline: (data) => {
     const fromUser = data.from;
-    ensurePmFooterTab(fromUser, fromUser, 'declined');
-    messageHandler.addSystemMessage(
-      elements.messages,
-      'System',
-      `${fromUser} declined your private chat request.`
-    );
+    pmManager.ensureTab(fromUser, 'declined');
+    showPmDeclineNotification(fromUser);
+    refreshPmButtonStates();
   },
 
   pm_disconnect: (data) => {
     const fromUser = data.from;
 
-    ensurePmFooterTab(fromUser, fromUser, 'disconnected');
+    // Always show toast notification for disconnect
+    const content = `<span><b>${fromUser}</b> has disconnected from your private chat</span>`;
+    utils.createToast('disconnect-notification', content);
 
-    if (currentPmUser === fromUser) {
+    // Add disconnect message if we had an active session and chat is open
+    if (currentPmUser === fromUser && !elements.privateChatContainer.classList.contains('hidden')) {
       messageHandler.addSystemMessage(
         elements.privateChatBox,
         `${fromUser} has disconnected from the private chat.`
       );
 
-      setPrivateChatEnabled(false);
+      pmManager.setChatEnabled(false);
       elements.privateChatMinimize.style.display = 'none';
-      elements.privateChatDisconnect.style.display = 'none';
-      elements.privateChatClose.style.display = 'inline-block'; // make sure Close is visible
-    } else {
-      messageHandler.addSystemMessage(
-        elements.messages,
-        'System',
-        `${fromUser} has disconnected from your private chat.`
-      );
+
+      // Change disconnect button to close button
+      elements.privateChatDisconnect.title = 'Close';
+      elements.privateChatDisconnect.onclick = pmManager.closeChat;
     }
+
+    // Clean up the PM session and remove the tab
+    pmSessions.delete(fromUser);
+    unreadCounts.delete(fromUser);
+
+    const tab = utils.getElement(`pm-tab-${fromUser}`);
+    if (tab) {
+      tab.remove();
+    }
+
+    // If this was the current PM user, close the chat
+    if (currentPmUser === fromUser) {
+      currentPmUser = null;
+      pmManager.closeChat();
+    }
+
+    refreshPmButtonStates();
   },
 };
 
@@ -358,33 +648,59 @@ function setupSocket() {
 
 function updateOnlineUsers(userList) {
   if (!elements.onlineUsers) return;
+  latestUserList = userList; // Store for later refresh
   elements.onlineUsers.innerHTML = '';
 
   userList.forEach((user) => {
     if (user !== currentUsername) {
       const li = utils.createElement('li', 'online-user');
+      const hasActiveSession = pmSessions.has(user) || utils.getElement(`pm-tab-${user}`);
+
       li.innerHTML = `
         <span class="user-name">${user}</span>
-        <button class="pm-button" onclick="sendPmInvite('${user}')">PM</button>
+        ${utils.createPmButton(user, hasActiveSession)}
       `;
       elements.onlineUsers.appendChild(li);
     }
   });
 }
 
-// Private chat functions
-function showPmInviteToast(fromUser) {
-  const toastContainer = document.getElementById('invite-toast-container');
-  const toast = utils.createElement('div', 'invite-toast');
+// Helper function to refresh PM button states
+function refreshPmButtonStates() {
+  if (latestUserList.length > 0) {
+    updateOnlineUsers(latestUserList);
+  }
+}
 
-  toast.innerHTML = `
-    <span><b>${fromUser}</b> invited you to a private chat</span>
-    <button onclick="acceptPmInvite('${fromUser}', this.parentElement)">Accept</button>
-    <button onclick="declinePmInvite('${fromUser}', this.parentElement)">Decline</button>
+// Simplified notification functions using utils.createToast
+function showPmInviteToast(fromUser) {
+  const content = `
+    <div class="invite-content">
+      <div class="invite-icon">💬</div>
+      <div class="invite-message">
+        <div class="invite-title">Private Chat Invitation</div>
+        <div class="invite-subtitle"><strong>${fromUser}</strong> wants to chat privately</div>
+      </div>
+    </div>
   `;
 
-  toastContainer.appendChild(toast);
-  setTimeout(() => toast.remove(), 15000);
+  const actions = `
+    <div class="invite-actions">
+      <button class="accept-btn" onclick="acceptPmInvite('${fromUser}', this.closest('.invite-toast'))">
+        <span>✓</span> Accept
+      </button>
+      <button class="decline-btn" onclick="declinePmInvite('${fromUser}', this.closest('.invite-toast'))">
+        <span>✕</span> Decline
+      </button>
+    </div>
+  `;
+
+  utils.createToast('', content, actions);
+}
+
+function showPmDeclineNotification(fromUser) {
+  const content = `<span><b>${fromUser}</b> declined your private chat request</span>`;
+  utils.createToast('decline-notification', content);
 }
 
 function declinePmInvite(user, toast) {
@@ -393,10 +709,10 @@ function declinePmInvite(user, toast) {
 }
 
 function sendPmInvite(user) {
-  ensurePmFooterTab(user, user, 'pending');
+  pmManager.ensureTab(user, 'pending');
   socket.send(JSON.stringify({ type: 'pm_invite', to: user }));
-  // Request the user's public key for encryption
   requestPublicKey(user);
+  refreshPmButtonStates();
 }
 
 async function requestPublicKey(username) {
@@ -430,52 +746,33 @@ async function sendPublicKey(username) {
 
 function acceptPmInvite(user, toast) {
   socket.send(JSON.stringify({ type: 'pm_accept', to: user }));
-  ensurePmFooterTab(user, user, 'accepted');
-  openPrivateChat(user);
+  pmManager.ensureTab(user, 'accepted');
+  pmManager.openChat(user);
   toast.remove();
-  // Request the user's public key for encryption
   requestPublicKey(user);
+  refreshPmButtonStates();
 }
 
-function openPrivateChat(user) {
-  currentPmUser = user;
-  elements.privateChatContainer.style.display = 'flex';
-  elements.privateChatContainer.classList.remove('hidden');
-  elements.privateChatContainer.dataset.user = user;
+// Simplified chat window functions
+function minimizePrivateChat() {
+  elements.privateChatContainer.classList.add('hidden');
+}
 
-  // Update the chat header with the user's name
-  const chatUserName = document.getElementById('chat-user-name');
-  if (chatUserName) {
-    chatUserName.textContent = `with ${user}`;
-  }
+function maximizePrivateChat() {
+  const container = elements.privateChatContainer;
+  const button = elements.privateChatMaximize;
+  const svg = button.querySelector('svg');
 
-  elements.privateChatMinimize.style.display = 'inline-block';
-  elements.privateChatDisconnect.style.display = 'inline-block';
-  elements.privateChatClose.style.display = 'inline-block';
-
-  elements.privateChatBox.innerHTML = '';
-
-  const messages = pmSessions.get(user) || [];
-  if (messages.length === 0) {
-    messageHandler.addSystemMessage(
-      elements.privateChatBox,
-      `Private chat with <b>${user}</b> started.`
-    );
+  if (container.classList.contains('maximized')) {
+    // Restore to normal size
+    container.classList.remove('maximized');
+    button.title = 'Maximize';
+    // Update SVG for maximize icon (you may need to adjust this)
   } else {
-    messages.forEach(({ from, text }) => {
-      messageHandler.addMessage(elements.privateChatBox, from, text);
-    });
-  }
-
-  activateTab(user);
-
-  const tab = document.getElementById(`pm-tab-${user}`);
-  if (tab?.classList.contains('disconnected')) {
-    setPrivateChatEnabled(false);
-    elements.privateChatMinimize.style.display = 'none';
-    elements.privateChatDisconnect.style.display = 'none';
-  } else {
-    setPrivateChatEnabled(true);
+    // Maximize
+    container.classList.add('maximized');
+    button.title = 'Restore';
+    // Update SVG for restore icon (you may need to adjust this)
   }
 }
 
@@ -493,95 +790,24 @@ async function sendPrivateMessage() {
           ciphertext,
         })
       );
+
+      // Add message to chat display
       messageHandler.addMessage(elements.privateChatBox, currentUsername, msg);
+
+      // Store the sent message in the session
+      if (!pmSessions.has(to)) {
+        pmSessions.set(to, []);
+      }
+      pmSessions.get(to).push({ from: currentUsername, text: msg });
+
       elements.privateInput.value = '';
     } catch (error) {
       console.error('Error sending private message:', error);
-      messageHandler.addSystemMessage(
-        elements.privateChatBox,
-        'Failed to encrypt and send message. Please try again.'
-      );
+      alert('Failed to send private message: ' + error.message);
     }
   }
 }
 
-function closePrivateChat() {
-  const user = elements.privateChatContainer.dataset.user;
-  elements.privateChatContainer.style.display = 'none';
-  elements.privateChatBox.innerHTML = '';
-  delete elements.privateChatContainer.dataset.user;
-
-  // Clear the username from header
-  const chatUserName = document.getElementById('chat-user-name');
-  if (chatUserName) {
-    chatUserName.textContent = '';
-  }
-
-  // If the user was marked as disconnected, remove the tab entirely
-  const tab = document.getElementById(`pm-tab-${user}`);
-  if (tab?.classList.contains('disconnected')) {
-    tab.remove();
-    pmSessions.delete(user);
-    currentPmUser = null;
-  }
-}
-
-function minimizePrivateChat() {
-  elements.privateChatContainer.classList.add('hidden');
-
-  // Clear the username from header when minimized
-  const chatUserName = document.getElementById('chat-user-name');
-  if (chatUserName) {
-    chatUserName.textContent = '';
-  }
-}
-
-function setPrivateChatEnabled(enabled) {
-  elements.privateInput.disabled = !enabled;
-  elements.privateSendBtn.disabled = !enabled;
-
-  elements.privateInput.placeholder = enabled
-    ? 'Type a private message...'
-    : 'Private chat disconnected';
-}
-
-function disconnectPrivateChat() {
-  const currentUser = elements.privateChatContainer.dataset.user;
-  if (currentUser) {
-    // Send disconnect notification to the other user
-    socket.send(
-      JSON.stringify({
-        type: 'pm_disconnect',
-        to: currentUser,
-      })
-    );
-
-    // Remove the tab
-    const tab = document.getElementById(`pm-tab-${currentUser}`);
-    if (tab) {
-      tab.remove();
-    }
-
-    // Clear the session
-    pmSessions.delete(currentUser);
-
-    messageHandler.addSystemMessage(
-      elements.privateChatBox,
-      `You have disconnected the private chat.`
-    );
-
-    // Close the chat window
-    closePrivateChat();
-
-    // Reset current user if it was the active one
-    if (currentPmUser === currentUser) {
-      currentPmUser = null;
-    }
-    setPrivateChatEnabled(false);
-  }
-}
-
-// Handle Enter key in private chat input
 function handlePrivateInputKeyPress(event) {
   if (event.key === 'Enter') {
     event.preventDefault();
@@ -589,167 +815,19 @@ function handlePrivateInputKeyPress(event) {
   }
 }
 
-// PM Session Management
-const pmSessions = new Map(); // key: username, value: array of messages
-let currentPmUser = null;
-
-// Add footer tab if it doesn't exist
-// Ensure a private message footer tab for a given user/conversation
-function ensurePmFooterTab(chatId, userName, status) {
-  const footer = document.getElementById('pm-footer'); // Container for PM tabs
-  if (!footer) return; // Footer container must exist
-
-  const tabId = `pm-tab-${chatId}`; // Unique ID for the tab element
-  let tab = document.getElementById(tabId);
-
-  // If the tab doesn't exist yet, create it
-  if (!tab && status !== 'declined') {
-    tab = document.createElement('div');
-    tab.id = tabId;
-    tab.classList.add('pm-tab');
-
-    // Apply status-specific styling via classes
-    if (status === 'pending') {
-      tab.classList.add('pending');
-      tab.textContent = `${userName} (pending)`;
-    } else if (status === 'accepted') {
-      tab.classList.add('accepted');
-      tab.textContent = userName;
-    } else if (status === 'disconnected') {
-      tab.classList.add('disconnected');
-      tab.textContent = `${userName} (offline)`;
-    }
-
-    // Click handler for toggling the private chat window
-    tab.addEventListener('click', function () {
-      // Toggle visibility: show/hide the chat window
-      if (elements.privateChatContainer.classList.contains('hidden')) {
-        // Show the chat window
-        elements.privateChatContainer.classList.remove('hidden');
-        switchToPmChat(chatId);
-      } else {
-        // Hide the chat window
-        elements.privateChatContainer.classList.add('hidden');
-      }
-
-      // Toggle active class on all tabs
-      document.querySelectorAll('.pm-tab').forEach((t) => t.classList.remove('active'));
-      if (!elements.privateChatContainer.classList.contains('hidden')) {
-        tab.classList.add('active');
-      }
-    });
-
-    footer.appendChild(tab);
-  } else if (tab) {
-    // Tab already exists: update its status styling if needed
-    if (!tab.classList.contains('disconnected')) {
-      tab.classList.remove('pending', 'accepted'); // don't remove disconnected if it's already there
-    }
-
-    if (status === 'pending') {
-      tab.classList.add('pending');
-      tab.textContent = `${userName} (pending)`;
-    } else if (status === 'accepted') {
-      tab.classList.add('accepted');
-      tab.textContent = userName;
-    } else if (status === 'disconnected') {
-      tab.classList.add('disconnected');
-      tab.textContent = `${userName} (offline)`;
-    }
-  }
-
-  // If status is 'declined', remove the tab from the footer
-  if (status === 'declined' && tab) {
-    footer.removeChild(tab);
-  }
-}
-
-// Switch to PM with given user
-function switchToPmChat(user) {
-  currentPmUser = user;
-  elements.privateChatContainer.dataset.user = user;
-
-  // Update the chat header with the user's name
-  const chatUserName = document.getElementById('chat-user-name');
-  if (chatUserName) {
-    chatUserName.textContent = `with ${user}`;
-  }
-
-  // Activate the clicked tab
-  document.querySelectorAll('.pm-tab').forEach((btn) => btn.classList.remove('active'));
-  document.getElementById(`pm-tab-${user}`)?.classList.add('active');
-
-  // Display chat
-  elements.privateChatContainer.style.display = 'flex';
-  elements.privateChatContainer.classList.remove('hidden');
-
-  const messages = pmSessions.get(user) || [];
-  elements.privateChatBox.innerHTML = '';
-
-  if (messages.length === 0) {
-    messageHandler.addSystemMessage(
-      elements.privateChatBox,
-      `Private chat with <b>${user}</b> started.`
-    );
-  } else {
-    messages.forEach(({ from, text }) => {
-      messageHandler.addMessage(elements.privateChatBox, from, text);
-    });
-  }
-  if (document.getElementById(`pm-tab-${user}`)?.classList.contains('disconnected')) {
-    setPrivateChatEnabled(false);
-  } else {
-    setPrivateChatEnabled(true);
-  }
-}
-
-// Handle incoming PM message (async version with proper decryption)
-socketHandlers.pm_message = async (data) => {
-  const { from, ciphertext } = data;
-
+function playMessageAlert() {
   try {
-    const msg = await utils.decrypt(ciphertext);
-
-    if (!pmSessions.has(from)) {
-      pmSessions.set(from, []);
-      ensurePmFooterTab(from, from, 'accepted');
-    }
-
-    pmSessions.get(from).push({ from, text: msg });
-
-    if (currentPmUser === from) {
-      messageHandler.addMessage(elements.privateChatBox, from, msg);
-    } else {
-      // Flash tab to indicate new message
-      const tab = document.getElementById(`pm-tab-${from}`);
-      if (tab) {
-        tab.classList.add('notify');
-        // Remove notification after 5 seconds
-        setTimeout(() => tab.classList.remove('notify'), 5000);
-      }
-    }
+    const audio = new Audio('/static/message_alert.mp3');
+    audio.volume = 0.3;
+    audio.play().catch((error) => {
+      console.warn('Failed to play message alert sound:', error);
+    });
   } catch (error) {
-    console.error('Error handling PM message:', error);
-    if (currentPmUser === from) {
-      messageHandler.addMessage(
-        elements.privateChatBox,
-        from,
-        '[Encrypted message - decryption failed]'
-      );
-    }
+    console.warn('Error creating audio element:', error);
   }
-};
-
-// Activate tab function
-function activateTab(user) {
-  document.querySelectorAll('.pm-tab').forEach((btn) => btn.classList.remove('active'));
-  document.getElementById(`pm-tab-${user}`)?.classList.add('active');
-  currentPmUser = user;
 }
 
-// Users panel toggle functionality
-let isPanelHidden = true;
-
+// Simplified users panel toggle
 function toggleUsersPanel() {
   isPanelHidden = !isPanelHidden;
 
@@ -787,8 +865,17 @@ function toggleUsersPanel() {
   }
 }
 
-// Initialize app
-window.addEventListener('DOMContentLoaded', () => {
+// About modal functions
+function openAboutModal() {
+  elements.aboutModal?.classList.remove('hidden');
+}
+
+function closeAboutModal() {
+  elements.aboutModal?.classList.add('hidden');
+}
+
+// Simplified initialization
+function initializeApp() {
   // Authentication
   token = utils.getTokenFromCookie('access_token');
   if (!token) {
@@ -806,25 +893,10 @@ window.addEventListener('DOMContentLoaded', () => {
   currentUsername = payload.sub;
 
   // Update header with username
-  const userDisplay = document.getElementById('current-user');
+  const userDisplay = utils.getElement('current-user');
   if (userDisplay) {
     userDisplay.textContent = currentUsername;
   }
-
-  // Event listeners
-  elements.logoutBtn?.addEventListener('click', () => {
-    document.cookie = 'access_token=; Max-Age=0';
-    window.location.href = '/login';
-  });
-
-  elements.privateSendBtn.addEventListener('click', sendPrivateMessage);
-  elements.privateChatClose.addEventListener('click', closePrivateChat);
-  elements.privateChatMinimize.addEventListener('click', minimizePrivateChat);
-  elements.privateChatDisconnect.addEventListener('click', disconnectPrivateChat);
-  elements.privateInput.addEventListener('keypress', handlePrivateInputKeyPress);
-
-  // Users panel toggle
-  elements.usersToggle?.addEventListener('click', toggleUsersPanel);
 
   // Initialize panel as hidden
   elements.usersPanel.classList.add('hidden');
@@ -832,6 +904,60 @@ window.addEventListener('DOMContentLoaded', () => {
   elements.usersToggle.classList.add('panel-hidden');
   elements.usersToggle.textContent = '👥';
   elements.usersToggle.title = 'Show Users Panel';
+}
+
+function setupEventListeners() {
+  // Authentication
+  elements.logoutBtn?.addEventListener('click', () => {
+    document.cookie = 'access_token=; Max-Age=0';
+    window.location.href = '/login';
+  });
+
+  // Private chat controls
+  elements.privateSendBtn.addEventListener('click', sendPrivateMessage);
+  elements.privateChatMaximize.addEventListener('click', maximizePrivateChat);
+  elements.privateChatMinimize.addEventListener('click', minimizePrivateChat);
+  // Note: disconnect handler is set dynamically in pmManager.openChat based on connection state
+  elements.privateInput.addEventListener('keypress', handlePrivateInputKeyPress);
+
+  // Users panel toggle
+  elements.usersToggle?.addEventListener('click', toggleUsersPanel);
+
+  // About modal
+  elements.aboutBtn?.addEventListener('click', openAboutModal);
+  elements.closeAboutModal?.addEventListener('click', closeAboutModal);
+  elements.aboutModal?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('modal-overlay')) {
+      closeAboutModal();
+    }
+  });
+
+  // Chat form submission
+  elements.form.addEventListener('submit', (e) => {
+    e.preventDefault();
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      console.warn('Socket is not connected.');
+      return;
+    }
+
+    const message = elements.input.value.trim();
+    if (message && currentUsername) {
+      socket.send(
+        JSON.stringify({
+          type: 'chat_message',
+          data: { message },
+        })
+      );
+      elements.input.value = '';
+    }
+  });
+}
+
+// Main initialization
+window.addEventListener('DOMContentLoaded', () => {
+  initializeApp();
+  setupEventListeners();
 
   // Generate RSA key pair for encryption
   utils
@@ -852,25 +978,4 @@ window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     elements.usersPanel?.classList.remove('panel-loading');
   }, 100);
-});
-
-// Chat form submission
-elements.form.addEventListener('submit', (e) => {
-  e.preventDefault();
-
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    console.warn('Socket is not connected.');
-    return;
-  }
-
-  const message = elements.input.value.trim();
-  if (message && currentUsername) {
-    socket.send(
-      JSON.stringify({
-        type: 'chat_message',
-        data: { message },
-      })
-    );
-    elements.input.value = '';
-  }
 });

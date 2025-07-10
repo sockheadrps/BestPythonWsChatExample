@@ -14,11 +14,28 @@
       </div>
     </div>
     <div class="header-bar">
-      <div class="user-info">
-        <span class="logged-in-text">Logged in as:</span>
-        <span id="current-user" class="username-display"></span>
+      <button id="about-btn" class="about-btn" title="About this app">
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M9,9h0a3,3,0,0,1,6,0c0,2-3,3-3,3" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        About
+      </button>
+      <div class="header-controls">
+        <div class="user-info">
+          <span class="logged-in-text">Logged in as:</span>
+          <span id="current-user" class="username-display"></span>
+        </div>
+        <button id="logout-btn">Logout</button>
       </div>
-      <button id="logout-btn">Logout</button>
     </div>
 
     <div id="private-chat-container">
@@ -28,6 +45,19 @@
           <span class="chat-user" id="chat-user-name">with Username</span>
         </div>
         <div class="header-controls">
+          <button id="maximize-private-chat" class="header-btn maximize-btn" title="Maximize">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+              <polyline points="8,8 16,8 16,16" />
+            </svg>
+          </button>
           <button id="minimize-private-chat" class="header-btn minimize-btn" title="Minimize">
             <svg
               width="14"
@@ -49,22 +79,6 @@
               stroke="currentColor"
               stroke-width="2"
             >
-              <circle cx="12" cy="12" r="3" />
-              <path d="m8.5 8.5-1-1" />
-              <path d="m15.5 15.5 1 1" />
-              <path d="m15.5 8.5 1-1" />
-              <path d="m8.5 15.5-1 1" />
-            </svg>
-          </button>
-          <button id="close-private-chat" class="header-btn close-btn" title="Close">
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -78,6 +92,130 @@
       </div>
     </div>
     <div id="invite-toast-container"></div>
+
+    <!-- About Modal -->
+    <div id="about-modal" class="modal hidden">
+      <div class="modal-overlay"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>About This Chat App</h2>
+          <button id="close-about-modal" class="modal-close">
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="tech-section">
+            <h3>🚀 Backend Technologies</h3>
+            <div class="tech-grid">
+              <div class="tech-item">
+                <strong>FastAPI</strong>
+                <span>Modern backend framework</span>
+              </div>
+              <div class="tech-item">
+                <strong>WebSockets</strong>
+                <span>Real-time communication</span>
+              </div>
+              <div class="tech-item">
+                <strong>Pydantic</strong>
+                <span>Data validation & serialization</span>
+              </div>
+              <div class="tech-item">
+                <strong>SQLite</strong>
+                <span>Lightweight embedded database</span>
+              </div>
+              <div class="tech-item">
+                <strong>SQLAlchemy</strong>
+                <span>ORM for database operations</span>
+              </div>
+              <div class="tech-item">
+                <strong>Passlib + Bcrypt</strong>
+                <span>Password hashing</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="tech-section">
+            <h3>💻 Frontend</h3>
+            <div class="tech-grid">
+              <div class="tech-item">
+                <strong>Vanilla JavaScript</strong>
+                <span>Lightweight client-side interactivity</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="tech-section">
+            <h3>🔐 Security Features</h3>
+            <div class="feature-list">
+              <div class="feature-item">
+                <strong>JWT Authentication:</strong> Tokens stored as cookies and validated on every
+                request
+              </div>
+              <div class="feature-item">
+                <strong>WebSocket Security:</strong> Connections require valid token as query
+                parameter
+              </div>
+              <div class="feature-item">
+                <strong>Password Security:</strong> Bcrypt hashing with unique salt, no plaintext
+                storage
+              </div>
+              <div class="feature-item">
+                <strong>Session Management:</strong> Token-based system with HTTP-only cookies
+              </div>
+            </div>
+          </div>
+
+          <div class="tech-section">
+            <h3>💬 Messaging Features</h3>
+            <div class="feature-list">
+              <div class="feature-item">
+                <strong>Real-time Chat:</strong> WebSocket-based messaging with instant updates
+              </div>
+              <div class="feature-item">
+                <strong>User Events:</strong> Dynamic join/leave notifications
+              </div>
+              <div class="feature-item">
+                <strong>Message Broadcasting:</strong> Server-side broadcasting to all connected
+                clients
+              </div>
+              <div class="feature-item">
+                <strong>Data Validation:</strong> Message validation and serialization via Pydantic
+              </div>
+            </div>
+          </div>
+
+          <div class="tech-section">
+            <h3>🔒 End-to-End Encryption for Private Messages</h3>
+            <div class="feature-list">
+              <div class="feature-item">
+                <strong>RSA Key Pairs:</strong> Each user generates public/private keys upon
+                connection
+              </div>
+              <div class="feature-item">
+                <strong>Key Exchange:</strong> Public keys shared through the server
+              </div>
+              <div class="feature-item">
+                <strong>Message Encryption:</strong> Messages encrypted with recipient's public key
+              </div>
+              <div class="feature-item">
+                <strong>Privacy:</strong> Server only relays encrypted content, cannot decrypt
+                messages
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <div class="layout-container">
       <div class="users-toggle" id="users-toggle" title="Hide Users Panel">◀</div>

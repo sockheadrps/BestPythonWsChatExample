@@ -1,65 +1,83 @@
-
 from fastapi import WebSocket
 import json
-from typing import Union
-from server.utils.models import PrivateMessage
-
+from typing import Union, Set
+from server.utils.models import PrivateMessage, PmDisconnectMessage
 
 class PrivateConnectionManager:
     def __init__(self):
         self.private_connections: dict[str, WebSocket] = {}
         self.public_keys: dict[str, str] = {}
+        self.active_pm_sessions: dict[str, Set[str]] = {}
 
     async def connect(self, websocket: WebSocket, username: str):
-            self.private_connections[username] = websocket
+        self.private_connections[username] = websocket
 
     def disconnect(self, username: str):
         self.private_connections.pop(username, None)
+        self.public_keys.pop(username, None)
+
+    async def disconnect_and_notify_partners(self, username: str):
+        """Disconnect a user and notify their PM partners."""
+        partners = self.active_pm_sessions.get(username, set()).copy()
+
+        for partner in partners:
+            await self.send_to_user(partner, PmDisconnectMessage(sender=username))
+            self.active_pm_sessions.get(partner, set()).discard(username)
+            if not self.active_pm_sessions.get(partner):
+                self.active_pm_sessions.pop(partner, None)
+
+        self.active_pm_sessions.pop(username, None)
+        self.disconnect(username)
+
+    def add_pm_session(self, user1: str, user2: str):
+        """Track that user1 and user2 are in a PM session."""
+        self.active_pm_sessions.setdefault(user1, set()).add(user2)
+        self.active_pm_sessions.setdefault(user2, set()).add(user1)
+
+    def remove_pm_session(self, user1: str, user2: str):
+        """Remove PM session between user1 and user2."""
+        for a, b in [(user1, user2), (user2, user1)]:
+            if a in self.active_pm_sessions:
+                self.active_pm_sessions[a].discard(b)
+                if not self.active_pm_sessions[a]:
+                    self.active_pm_sessions.pop(a)
 
     def register_pubkey(self, username: str, pubkey: str):
-        print(f"Registering pubkey for {username}: {pubkey}")
         self.public_keys[username] = pubkey
+        print(f"Registered public key for {username}")
 
     def get_pubkey(self, username: str) -> str:
-        print(f"Getting pubkey for {username}: {self.public_keys.get(username)}")
-        return self.public_keys.get(username)
+        key = self.public_keys.get(username)
+        print(f"Public key lookup for {username}: {'found' if key else 'not found'}")
+        return key
 
-    async def send_to_user(self, username: str, payload: Union[dict, PrivateMessage]):
-        if username in self.private_connections:
-            try:
-                # Validate the message if it's a dict
-                if isinstance(payload, dict):
-                    # Try to validate the message structure
-                    try:
-                        # This will validate the structure but we'll still send the original dict
-                        # to maintain compatibility
-                        validated = self._validate_message(payload)
-                        print(f"✅ Validated message type: {payload.get('type')}")
-                    except Exception as e:
-                        print(f"⚠️  Message validation failed for {username}: {e}")
-                        # Continue sending anyway for backwards compatibility
-                
-                message_to_send = payload.model_dump(by_alias=True) if hasattr(payload, 'model_dump') else payload
-                print(f"Sending to {username}: {message_to_send}")
-                await self.private_connections[username].send_json(message_to_send)
-            except Exception:
-                # Connection is closed, remove it from private connections
-                if username in self.private_connections:
-                    del self.private_connections[username]
-    
+    async def send_to_user(self, username: str, payload: PrivateMessage):
+        """Send a validated Pydantic message to a user if connected."""
+        websocket = self.private_connections.get(username)
+        if not websocket:
+            return
+
+        try:
+            message = payload.model_dump(by_alias=True, mode='json')
+            await websocket.send_json(message)
+        except Exception as e:
+            print(f"Failed to send message to {username}: {e}")
+            self.private_connections.pop(username, None)
+
+
     def _validate_message(self, payload: dict) -> PrivateMessage:
-        """Validate a message payload against the PrivateMessage models"""
+        """Validate a raw dictionary payload into a typed Pydantic message."""
         msg_type = payload.get("type")
         if not msg_type:
-            raise ValueError("Message missing 'type' field")
-        
-        # Import specific models for validation
+            raise ValueError("Missing 'type' in message")
+
         from server.utils.models import (
             PmInviteMessage, PmAcceptMessage, PmDeclineMessage, 
-            PmTextMessage, PmDisconnectMessage, PubkeyRequestMessage, PubkeyResponseMessage
+            PmTextMessage, PmDisconnectMessage, 
+            PubkeyRequestMessage, PubkeyResponseMessage,
         )
-        
-        type_to_model = {
+
+        type_map = {
             "pm_invite": PmInviteMessage,
             "pm_accept": PmAcceptMessage,
             "pm_decline": PmDeclineMessage,
@@ -68,9 +86,9 @@ class PrivateConnectionManager:
             "pubkey_request": PubkeyRequestMessage,
             "pubkey_response": PubkeyResponseMessage,
         }
-        
-        if msg_type not in type_to_model:
+
+        model_class = type_map.get(msg_type)
+        if not model_class:
             raise ValueError(f"Unknown message type: {msg_type}")
         
-        model_class = type_to_model[msg_type]
         return model_class.model_validate(payload)

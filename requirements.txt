@@ -5,3 +5,8 @@ python-jose
 passlib[bcrypt]
 jinja2
 cryptography
+pytest
+pytest-asyncio
+pytest-mock
+pytest-cov
+httpx

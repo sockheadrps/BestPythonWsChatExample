@@ -1,6 +1,7 @@
 from fastapi import WebSocket
 import json
-from server.utils.models import UserListMessage, ChatMessageData
+from typing import Union
+from server.utils.models import UserListMessage, ChatMessageData, WsEvent
 
 class ConnectionManager:
     def __init__(self):
@@ -23,18 +24,20 @@ class ConnectionManager:
     async def send_message(self, message: str, websocket: WebSocket):
         await websocket.send_json(message)
 
-    async def broadcast(self, message: str):
-        # Create a copy of connections to avoid modification during iteration
-        connections_copy = list(self.active_connections.items())
-        parsed_message = json.loads(message)
-        
-        for username, connection in connections_copy:
+    async def broadcast(self, message: WsEvent):
+        """Broadcast a validated WsEvent to all connected users."""
+        try:
+            parsed_message = message.model_dump(mode='json')
+        except Exception as e:
+            print(f"Failed to serialize WsEvent: {e}")
+            return
+
+        for username, connection in list(self.active_connections.items()):
             try:
                 await connection.send_json(parsed_message)
             except Exception:
-                # Connection is closed, remove it from active connections
-                if username in self.active_connections:
-                    del self.active_connections[username]
+                # Remove closed/broken connections
+                self.active_connections.pop(username, None)
     
     async def send_to_user(self, username: str, message: dict):
         if username in self.active_connections:
@@ -66,14 +69,13 @@ class ConnectionManager:
         ]
         
         for message_text in welcome_messages:
-            welcome_msg = {
-                "event": "chat_message",
-                "data": {
-                    "user": "System",
-                    "message": message_text
-                }
-            }
-            await websocket.send_json(welcome_msg)
+            # Use validated Pydantic models for welcome messages
+            chat_data = ChatMessageData(
+                user="System",
+                message=message_text
+            )
+            ws_event = WsEvent(event="chat_message", data=chat_data)
+            await websocket.send_json(ws_event.model_dump(mode='json'))
 
 
 
